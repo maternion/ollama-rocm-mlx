@@ -160,9 +160,17 @@ func MetalIsAvailable() bool {
 	return bool(available)
 }
 
-// CUDAIsAvailable returns true if a CUDA GPU is available.
+// CUDAIsAvailable returns true when the "cuda" custom-kernel sources are
+// usable: either on an actual CUDA build, or on a ROCm-backed build, where
+// fast::cuda_kernel is routed to the ROCm custom-kernel (hipRTC) backend and
+// compiles the same CUDA-style kernel bodies.
 func CUDAIsAvailable() bool {
 	var available C._Bool
 	mlxCheck(C.mlx_cuda_is_available(&available))
-	return bool(available)
+	if bool(available) {
+		return true
+	}
+	// Metal builds have their own kernel sources; CPU-only builds fail at
+	// kernel creation and permanently fall back to the graph path.
+	return !MetalIsAvailable()
 }

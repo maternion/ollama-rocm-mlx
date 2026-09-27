@@ -15,6 +15,19 @@ status() { echo ">>> $*" >&2; }
 error() { echo "${red}ERROR:${plain} $*"; exit 1; }
 warning() { echo "${red}WARNING:${plain} $*"; }
 
+# Comma-separated backend selection for locally built payloads.
+#   rocm -> llama.cpp ROCm runner (build/lib/ollama/rocm_v7_2) for GGUF models
+#   mlx  -> MLX ROCm backend (build/lib/ollama/mlx_rocm_v10) for *-mlx models
+#   cpu  -> base runtime only (no GPU backend)
+# Example: OLLAMA_BACKEND=rocm,mlx
+# When unset, the prebuilt release for the detected GPU is downloaded from
+# ollama.com (upstream behaviour).
+OLLAMA_BACKEND="${OLLAMA_BACKEND:-}"
+# Directory holding a locally built payload (build/lib/ollama). Defaults to
+# <repo>/build when this script is run from a checkout.
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+OLLAMA_PAYLOAD_DIR="${OLLAMA_PAYLOAD_DIR:-$(dirname "$SCRIPT_DIR")/build}"
+
 TEMP_DIR=$(mktemp -d)
 cleanup() { rm -rf $TEMP_DIR; }
 trap cleanup EXIT
@@ -168,6 +181,90 @@ fi
 status "Installing ollama to $OLLAMA_INSTALL_DIR"
 $SUDO install -o0 -g0 -m755 -d $BINDIR
 $SUDO install -o0 -g0 -m755 -d "$OLLAMA_INSTALL_DIR/lib/ollama"
+
+# Local payload install: when OLLAMA_BACKEND names one or more locally built
+# backends, install the binary plus the staged payload instead of downloading
+# release artifacts. This is the ROCm/MLX developer path.
+install_local_payload() {
+    PAYLOAD_LIB="$OLLAMA_PAYLOAD_DIR/lib/ollama"
+    GO_BIN="$OLLAMA_PAYLOAD_DIR/../ollama"
+    if [ ! -x "$GO_BIN" ]; then
+        GO_BIN="$(dirname "$OLLAMA_PAYLOAD_DIR")/ollama"
+    fi
+    if [ ! -d "$PAYLOAD_LIB" ]; then
+        error "Local payload not found at $PAYLOAD_LIB (run ./build or set OLLAMA_PAYLOAD_DIR)"
+    fi
+    if [ ! -x "$GO_BIN" ]; then
+        error "Local ollama binary not found at $GO_BIN"
+    fi
+
+    status "Installing local ollama binary from $GO_BIN"
+    $SUDO install -o0 -g0 -m755 "$GO_BIN" "$OLLAMA_INSTALL_DIR/ollama"
+    $SUDO install -o0 -g0 -m755 "$GO_BIN" "$BINDIR/ollama"
+
+    # Always install the base runtime (cpu/ggml shared libs) with the payload.
+    status "Installing base runtime libraries..."
+    $SUDO cp -a "$PAYLOAD_LIB"/. "$OLLAMA_INSTALL_DIR/lib/ollama/"
+
+    # Prune backends that were not requested so a CPU-only install stays lean.
+    install_backend() {
+        _dir="$PAYLOAD_LIB/$1"
+        if [ ! -d "$_dir" ]; then
+            warning "Requested backend '$1' not found in $PAYLOAD_LIB; skipping"
+            return 0
+        fi
+        status "Installing backend: $1"
+        $SUDO cp -a "$_dir" "$OLLAMA_INSTALL_DIR/lib/ollama/$1"
+    }
+
+    if [ -n "$OLLAMA_BACKEND" ]; then
+        # Only keep explicitly requested backend dirs plus the base runtime.
+        for _existing in "$OLLAMA_INSTALL_DIR"/lib/ollama/*/; do
+            [ -d "$_existing" ] || continue
+            _name=$(basename "$_existing")
+            _keep=false
+            for _want in $(echo "$OLLAMA_BACKEND" | tr ',' ' '); do
+                case "$_want" in
+                    rocm) [ "$_name" = "rocm_v7_2" ] && _keep=true ;;
+                    mlx)  [ "$_name" = "mlx_rocm_v10" ] && _keep=true ;;
+                esac
+            done
+            if [ "$_keep" = false ]; then
+                $SUDO rm -rf "$_existing"
+            fi
+        done
+    fi
+
+    if echo "$OLLAMA_BACKEND" | grep -q "rocm"; then
+        install_backend "rocm_v7_2"
+    fi
+    if echo "$OLLAMA_BACKEND" | grep -q "mlx"; then
+        install_backend "mlx_rocm_v10"
+    fi
+
+    if [ "$OLLAMA_INSTALL_DIR/bin/ollama" != "$BINDIR/ollama" ] ; then
+        status "Making ollama accessible in the PATH in $BINDIR"
+        $SUDO ln -sf "$OLLAMA_INSTALL_DIR/ollama" "$BINDIR/ollama"
+    fi
+
+    install_success() {
+        status "The Ollama API is now available at 127.0.0.1:11434."
+        status 'Install complete. Run "ollama" from the command line.'
+    }
+    trap install_success EXIT
+    install_success
+    if [ -n "$OLLAMA_BACKEND" ]; then
+        status "Installed backends: $OLLAMA_BACKEND"
+    fi
+    exit 0
+}
+
+# Developer/local path takes precedence: if OLLAMA_BACKEND is set, install the
+# locally built payload and skip all release downloads below.
+if [ -n "$OLLAMA_BACKEND" ]; then
+    install_local_payload
+fi
+
 download_and_extract "https://ollama.com/download" "$OLLAMA_INSTALL_DIR" "ollama-linux-${ARCH}"
 
 if [ "$OLLAMA_INSTALL_DIR/bin/ollama" != "$BINDIR/ollama" ] ; then

@@ -1336,6 +1336,15 @@ func (m *Model) Forward(b *batch.Batch, caches []cache.Cache) (hidden, auxHidden
 }
 
 func (m *Model) Unembed(x *mlx.Array) *mlx.Array {
+	// Hidden states ride in f32 (RMSNorm upcasts), while the lm_head/tied
+	// embedding weight stays bf16. MLX matmul promotes the weight to f32,
+	// which re-materializes the entire [vocab, hidden] bf16 table as f32 on
+	// EVERY decode step (~1.5 GB of conversion traffic + a 2x wider GEMV on
+	// the 9060 XT). Cast the hidden down to the weight dtype instead.
+	if l, ok := m.LMHead.(*nn.Linear); ok && l.Weight != nil &&
+		l.Weight.DType() != x.DType() {
+		x = x.AsType(l.Weight.DType())
+	}
 	return m.LMHead.Forward(x)
 }
 

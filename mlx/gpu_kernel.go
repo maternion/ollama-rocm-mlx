@@ -6,6 +6,7 @@ import "C"
 
 import (
 	"log/slog"
+	"os"
 	"sync"
 	"unsafe"
 )
@@ -92,14 +93,24 @@ func cStringVector(values []string) (C.mlx_vector_string, func(), error) {
 // run executes the kernel with the first backend that works, in CUDA,
 // Metal, fallback order. It panics if no variant can run the launch.
 func (k *gpuKernel) run(launch gpuLaunch) []*Array {
+	dbg := os.Getenv("OLLAMA_MLX_GATED_DELTA_DEBUG") == "1"
 	if outs, ok := k.applyCUDA(launch); ok {
+		if dbg {
+			slog.Error("gpu kernel ran", "kernel", k.name, "backend", "cuda")
+		}
 		return outs
+	}
+	if dbg {
+		slog.Error("gpu kernel cuda apply failed", "kernel", k.name, "cudaDisabled", k.cudaDisabled)
 	}
 	if outs, ok := k.applyMetal(launch); ok {
 		return outs
 	}
 	if k.fallback == nil {
 		panic("mlx: kernel " + k.name + " has no usable implementation")
+	}
+	if dbg {
+		slog.Error("gpu kernel using graph fallback", "kernel", k.name)
 	}
 	outs := k.fallback(launch)
 	if len(outs) != len(k.outputs) {

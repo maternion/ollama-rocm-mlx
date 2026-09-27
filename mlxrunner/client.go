@@ -284,10 +284,15 @@ func (c *Client) ContextLength() int {
 }
 
 func (c *Client) reportedContextLength(modelContextLength int) int {
-	if c.softContextLength > 0 && (modelContextLength == 0 || c.softContextLength < modelContextLength) {
-		return c.softContextLength
+	// The MLX engine grows KV state dynamically up to the model's ceiling, so
+	// report the runner's value. Falling back to a user-provided soft limit
+	// would misreport capacity in `ollama ps` and (via optionsForPrompt)
+	// silently cap requests at the default 4096 even when the engine supports
+	// far more.
+	if modelContextLength > 0 {
+		return modelContextLength
 	}
-	return modelContextLength
+	return c.softContextLength
 }
 
 // Detokenize implements llm.LlamaServer.
@@ -420,6 +425,22 @@ func (c *Client) Load(ctx context.Context, systemInfo ml.SystemInfo, gpus []ml.D
 				setEnv(cmd, "CUDA_PATH", d)
 				setEnv(cmd, "CUDA_HOME", d)
 				slog.Debug("mlx subprocess CUDA headers", "CUDA_PATH", d)
+				break
+			}
+		}
+	}
+
+	// Point MLX's ROCm/HIP JIT compiler at our bundled HIP runtime headers.
+	// MLX's ROCm backend compiles .hip kernels at runtime via hipRTC, which
+	// resolves headers via $ROCM_PATH/include (and $HIP_PATH). Always use
+	// bundled headers to avoid version mismatches with any system-installed
+	// ROCm toolkit.
+	if mlxDirs, err := filepath.Glob(filepath.Join(ml.LibOllamaPath, "mlx_rocm_*")); err == nil {
+		for _, d := range mlxDirs {
+			if _, err := os.Stat(filepath.Join(d, "include")); err == nil {
+				setEnv(cmd, "ROCM_PATH", d)
+				setEnv(cmd, "HIP_PATH", d)
+				slog.Debug("mlx subprocess ROCm headers", "ROCM_PATH", d)
 				break
 			}
 		}

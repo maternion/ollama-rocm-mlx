@@ -44,6 +44,30 @@
       "binaryDir": "${sourceDir}/../../build/mlx_cuda_v13"
     },
     {
+      "name": "mlx_rocm_v10_base",
+      "hidden": true,
+      "inherits": [ "default" ],
+      "cacheVariables": {
+        "MLX_BUILD_ROCM": "ON",
+        "MLX_BUILD_METAL": "OFF",
+        "MLX_BUILD_CUDA": "OFF",
+        "OLLAMA_RUNNER_DIR": "mlx_rocm_v10"
+      }
+    },
+    {
+      "name": "mlx_rocm_v10_linux",
+      "inherits": [ "mlx_rocm_v10_base" ],
+      "binaryDir": "${sourceDir}/../../build/mlx_rocm_v10",
+      "cacheVariables": {
+        "MLX_ROCM_ARCHITECTURES": "gfx1200"
+      }
+    },
+    {
+      "name": "mlx_rocm_v10_user_arch",
+      "inherits": [ "mlx_rocm_v10_base" ],
+      "binaryDir": "${sourceDir}/../../build/mlx_rocm_v10"
+    },
+    {
       "name": "mlx_metal_v3",
       "inherits": [ "default" ],
       "binaryDir": "${sourceDir}/../../build/metal-v3",
@@ -76,6 +100,16 @@
     {
       "name": "mlx_cuda_v13_user_arch",
       "configurePreset": "mlx_cuda_v13_user_arch",
+      "targets": [ "mlx", "mlxc" ]
+    },
+    {
+      "name": "mlx_rocm_v10_linux",
+      "configurePreset": "mlx_rocm_v10_linux",
+      "targets": [ "mlx", "mlxc" ]
+    },
+    {
+      "name": "mlx_rocm_v10_user_arch",
+      "configurePreset": "mlx_rocm_v10_user_arch",
       "targets": [ "mlx", "mlxc" ]
     },
     {

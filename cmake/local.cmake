@@ -8,10 +8,76 @@ include(ExternalProject)
 
 set(OLLAMA_LLAMA_BACKENDS "" CACHE STRING
     "Semicolon-separated llama-server GPU backends to build: cuda_v12;cuda_v13;rocm_v7_1;rocm_v7_2;vulkan;cuda_jetpack5;cuda_jetpack6")
-set(_ollama_mlx_backends_doc "Semicolon-separated MLX backends to build: cuda_v13;metal_v3;metal_v4")
+set(_ollama_mlx_backends_doc "Semicolon-separated MLX backends to build: cuda_v13;metal_v3;metal_v4;rocm_v10")
 set(OLLAMA_VERSION "0.0.0" CACHE STRING "Ollama version embedded in the local Go binary")
 set(OLLAMA_PAYLOAD_INSTALL_PREFIX "${CMAKE_BINARY_DIR}" CACHE PATH
     "Build-time staging prefix for nested Ollama native payloads")
+
+# Local single-GPU ROCm host defaults: on Linux hosts with a ROCm toolchain
+# and sibling source checkouts (<repo>/../mlx-rocm and <repo>/../mlx-c), a
+# bare `cmake -B build` builds the complete dual-engine payload: llama.cpp
+# ROCm runner (rocm_v7_2) plus the MLX ROCm backend (rocm_v10), for the
+# detected GPU architecture. Any explicit -D / env override still wins.
+set(_ollama_rocm_host OFF)
+if(UNIX AND NOT APPLE AND NOT WIN32 AND EXISTS "/opt/rocm/bin/hipcc")
+    set(_ollama_rocm_host ON)
+endif()
+
+if(_ollama_rocm_host AND NOT DEFINED CMAKE_PREFIX_PATH)
+    set(CMAKE_PREFIX_PATH "/opt/rocm" CACHE PATH "ROCm prefix for find_package")
+endif()
+
+if(_ollama_rocm_host AND EXISTS "${CMAKE_SOURCE_DIR}/../mlx-rocm/mlx/fast.h")
+    if(NOT DEFINED FETCHCONTENT_SOURCE_DIR_MLX OR "${FETCHCONTENT_SOURCE_DIR_MLX}" STREQUAL "")
+        set(FETCHCONTENT_SOURCE_DIR_MLX "${CMAKE_SOURCE_DIR}/../mlx-rocm"
+            CACHE PATH "Local MLX (ROCm fork) source tree")
+    endif()
+endif()
+if(_ollama_rocm_host AND EXISTS "${CMAKE_SOURCE_DIR}/../mlx-c/mlx/c/mlx.h")
+    if(NOT DEFINED "FETCHCONTENT_SOURCE_DIR_MLX-C" OR "${FETCHCONTENT_SOURCE_DIR_MLX-C}" STREQUAL "")
+        set(FETCHCONTENT_SOURCE_DIR_MLX-C "${CMAKE_SOURCE_DIR}/../mlx-c"
+            CACHE PATH "Local MLX-C source tree")
+    endif()
+endif()
+
+if(_ollama_rocm_host AND NOT OLLAMA_LLAMA_BACKENDS)
+    set(OLLAMA_LLAMA_BACKENDS "rocm_v7_2" CACHE STRING
+        "Semicolon-separated llama-server GPU backends to build" FORCE)
+    message(STATUS "Defaulting OLLAMA_LLAMA_BACKENDS=rocm_v7_2 (ROCm toolchain detected)")
+endif()
+
+if(_ollama_rocm_host AND NOT AMDGPU_TARGETS AND NOT CMAKE_HIP_ARCHITECTURES)
+    find_program(_ollama_rocm_agent_enumerator rocm_agent_enumerator
+        HINTS /opt/rocm/bin /opt/rocm/core-10.0/bin)
+    if(_ollama_rocm_agent_enumerator)
+        execute_process(
+            COMMAND ${_ollama_rocm_agent_enumerator}
+            OUTPUT_VARIABLE _ollama_gfx_targets
+            OUTPUT_STRIP_TRAILING_WHITESPACE
+            ERROR_QUIET)
+        if(_ollama_gfx_targets)
+            string(REGEX REPLACE "[\r\n]+" ";" _ollama_gfx_targets "${_ollama_gfx_targets}")
+            list(REMOVE_DUPLICATES _ollama_gfx_targets)
+            # Integrated GPUs (gfx9* / gfx10*/gfx11* APU parts) almost always
+            # sit beside a discrete card; building for them doubles compile
+            # time for no real use. Prefer discrete gfx1[12]* when present.
+            set(_ollama_dgpu_targets)
+            foreach(_gfx IN LISTS _ollama_gfx_targets)
+                if(_gfx MATCHES "^gfx1[12]")
+                    list(APPEND _ollama_dgpu_targets ${_gfx})
+                endif()
+            endforeach()
+            if(_ollama_dgpu_targets)
+                set(_ollama_gfx_targets ${_ollama_dgpu_targets})
+            endif()
+            set(AMDGPU_TARGETS "${_ollama_gfx_targets}" CACHE STRING
+                "AMD GPU architectures to build for" FORCE)
+            set(CMAKE_HIP_ARCHITECTURES "${_ollama_gfx_targets}" CACHE STRING
+                "HIP architectures" FORCE)
+            message(STATUS "Detected AMDGPU_TARGETS=${AMDGPU_TARGETS}")
+        endif()
+    endif()
+endif()
 
 string(REGEX REPLACE "^v" "" OLLAMA_VERSION "${OLLAMA_VERSION}")
 
@@ -91,6 +157,9 @@ function(ollama_default_mlx_backends output)
             set(_backends "metal_v3")
         endif()
         message(STATUS "Defaulting OLLAMA_MLX_BACKENDS=${_backends} for macOS arm64")
+    elseif(_ollama_rocm_host AND EXISTS "${CMAKE_SOURCE_DIR}/../mlx-rocm/mlx/fast.h")
+        set(_backends "rocm_v10")
+        message(STATUS "Defaulting OLLAMA_MLX_BACKENDS=rocm_v10 (ROCm toolchain + local mlx-rocm source)")
     endif()
     set(${output} "${_backends}" PARENT_SCOPE)
 endfunction()
@@ -378,6 +447,18 @@ function(ollama_mlx_cuda_preset output)
         set(_preset "mlx_cuda_v13_windows")
     else()
         set(_preset "mlx_cuda_v13_linux")
+    endif()
+    set(${output} "${_preset}" PARENT_SCOPE)
+endfunction()
+
+function(ollama_mlx_rocm_preset output)
+    ollama_cache_arg_is_set(MLX_ROCM_ARCHITECTURES _has_mlx_arch)
+    ollama_cache_arg_is_set(CMAKE_HIP_ARCHITECTURES _has_hip_arch)
+    ollama_cache_arg_is_set(AMDGPU_TARGETS _has_amdgpu_targets)
+    if(_has_mlx_arch OR _has_hip_arch OR _has_amdgpu_targets)
+        set(_preset "mlx_rocm_v10_user_arch")
+    else()
+        set(_preset "mlx_rocm_v10_linux")
     endif()
     set(${output} "${_preset}" PARENT_SCOPE)
 endfunction()
@@ -822,6 +903,22 @@ foreach(_backend IN LISTS OLLAMA_MLX_BACKENDS)
             RUNNER_DIR mlx_cuda_v13
             CMAKE_ARGS ${_mlx_cuda_args})
         list(APPEND _mlx_targets ollama-mlx-cuda_v13)
+    elseif(_backend STREQUAL "rocm_v10")
+        if(APPLE)
+            message(FATAL_ERROR "OLLAMA_MLX_BACKENDS=rocm_v10 is only supported on Linux")
+        endif()
+        ollama_mlx_rocm_preset(_mlx_rocm_preset)
+        set(_mlx_rocm_args)
+        ollama_append_cache_arg_if_set(_mlx_rocm_args MLX_ROCM_ARCHITECTURES)
+        ollama_append_cache_arg_if_set(_mlx_rocm_args CMAKE_HIP_ARCHITECTURES)
+        ollama_append_cache_arg_if_set(_mlx_rocm_args AMDGPU_TARGETS)
+        ollama_append_cache_arg_if_set(_mlx_rocm_args CMAKE_HIP_FLAGS)
+        ollama_append_cache_arg_if_set(_mlx_rocm_args CMAKE_PREFIX_PATH)
+        ollama_add_mlx_build(rocm_v10
+            PRESET ${_mlx_rocm_preset}
+            RUNNER_DIR mlx_rocm_v10
+            CMAKE_ARGS ${_mlx_rocm_args})
+        list(APPEND _mlx_targets ollama-mlx-rocm_v10)
     elseif(_backend STREQUAL "metal_v3")
         if(NOT APPLE)
             message(FATAL_ERROR "OLLAMA_MLX_BACKENDS=metal_v3 is only supported on macOS")

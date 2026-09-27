@@ -1,6 +1,12 @@
 package mlx
 
-import "math"
+import (
+	"fmt"
+	"log/slog"
+	"math"
+	"os"
+	"strconv"
+)
 
 var gatedDeltaRecurrenceKernel = &gpuKernel{
 	name:    "gated_delta_recurrence",
@@ -131,8 +137,8 @@ for (int t = 0; t < T_val; ++t) {
   }
   // Warp reduction (full warp, 32 threads in x)
   for (int offset = 16; offset > 0; offset >>= 1)
-    kv_mem += __shfl_down_sync(0xffffffff, kv_mem, offset);
-  kv_mem = __shfl_sync(0xffffffff, kv_mem, 0);
+    kv_mem += __shfl_down_sync(0xffffffffffffffffull, kv_mem, offset);
+  kv_mem = __shfl_sync(0xffffffffffffffffull, kv_mem, 0);
 
   auto delta = (static_cast<float>(v_[dv_idx]) - kv_mem) * static_cast<float>(beta_[hv_idx]);
 
@@ -144,7 +150,7 @@ for (int t = 0; t < T_val; ++t) {
   }
   // Warp reduction
   for (int offset = 16; offset > 0; offset >>= 1)
-    out += __shfl_down_sync(0xffffffff, out, offset);
+    out += __shfl_down_sync(0xffffffffffffffffull, out, offset);
   if (tid_x == 0) {
     y[dv_idx] = static_cast<InT>(out);
   }
@@ -652,20 +658,35 @@ func GatedDelta(packed, ba, dtBias, aExp, state, mask *Array, captureAll bool) (
 	return outs[0], outs[1], interior
 }
 
+// gatedDeltaDebugEnabled reports whether gated-delta dispatch logging is on
+// (env OLLAMA_MLX_GATED_DELTA_DEBUG=1). When on, the graph fallback reports
+// why the fused kernel rejected the inputs.
+func gatedDeltaDebugEnabled() bool {
+	v, _ := strconv.Atoi(os.Getenv("OLLAMA_MLX_GATED_DELTA_DEBUG"))
+	return v > 0
+}
+
 func resolveGatedDeltaDims(packed, ba, dtBias, aExp, state *Array) (gatedDeltaDims, bool) {
 	var dims gatedDeltaDims
+	gatedDeltaDbg := gatedDeltaDebugEnabled()
+	fail := func(why string) bool {
+		if gatedDeltaDbg {
+			slog.Error("gatedDelta fused kernel rejected inputs", "reason", why)
+		}
+		return false
+	}
 	if packed == nil || ba == nil || dtBias == nil || aExp == nil || state == nil {
 		return dims, false
 	}
 	sd := state.Dims()
 	if len(sd) != 4 || sd[0] < 1 {
-		return dims, false
+		return dims, fail(fmt.Sprintf("state dims %v", sd))
 	}
 	dims.B, dims.Hv, dims.Dv, dims.Dk = sd[0], sd[1], sd[2], sd[3]
 
 	pd := packed.Dims()
 	if len(pd) != 3 || pd[0] != dims.B || pd[1] < 1 || pd[1] > gatedDeltaMaxTokens {
-		return dims, false
+		return dims, fail(fmt.Sprintf("packed dims %v", pd))
 	}
 	dims.T, dims.PackedDim = pd[1], pd[2]
 
@@ -686,7 +707,9 @@ func resolveGatedDeltaDims(packed, ba, dtBias, aExp, state *Array) (gatedDeltaDi
 	if packed.DType() != DTypeBFloat16 || ba.DType() != DTypeBFloat16 ||
 		dtBias.DType() != DTypeBFloat16 || aExp.DType() != DTypeFloat32 ||
 		state.DType() != DTypeFloat32 {
-		return dims, false
+		return dims, fail(fmt.Sprintf(
+			"dtypes packed=%v ba=%v dtBias=%v aExp=%v state=%v (want bf16,bf16,bf16,f32,f32)",
+			packed.DType(), ba.DType(), dtBias.DType(), aExp.DType(), state.DType()))
 	}
 	return dims, true
 }
