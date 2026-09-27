@@ -826,7 +826,6 @@ if(OLLAMA_HAVE_LLAMA_SERVER)
                 -DGGML_HIP=ON
                 -DCMAKE_HIP_PLATFORM=amd
                 -DOLLAMA_GPU_BACKEND=hip)
-            ollama_append_cache_arg_if_set(_rocm_args AMDGPU_TARGETS)
             ollama_append_cache_arg_if_set(_rocm_args CMAKE_HIP_ARCHITECTURES)
             ollama_append_cache_arg_if_set(_rocm_args CMAKE_HIP_FLAGS)
             ollama_append_cache_arg_if_set(_rocm_args GGML_CUDA_NO_PEER_COPY)

@@ -93,8 +93,6 @@ if(GGML_CUDA)
 endif()
 
 if(GGML_HIP AND OLLAMA_RUNNER_DIR MATCHES "^rocm_v")
-    ollama_set_cache_default(CMAKE_HIP_FLAGS STRING
-        "-parallel-jobs=4" "HIP compiler flags")
     if(WIN32)
         # Windows ROCm split-load needs peer copies disabled for correctness.
         ollama_set_cache_default(GGML_CUDA_NO_PEER_COPY BOOL ON
@@ -103,9 +101,9 @@ if(GGML_HIP AND OLLAMA_RUNNER_DIR MATCHES "^rocm_v")
         # warnings from ROCm headers. Keep the workaround local to Windows ROCm
         # so it can be removed when the ROCm toolchain no longer needs it.
         ollama_append_cache_flags(CMAKE_C_FLAGS
-            -parallel-jobs=4 -Wno-ignored-attributes -Wno-deprecated-pragma)
+            -Wno-ignored-attributes -Wno-deprecated-pragma)
         ollama_append_cache_flags(CMAKE_CXX_FLAGS
-            -parallel-jobs=4 -Wno-ignored-attributes -Wno-deprecated-pragma)
+            -Wno-ignored-attributes -Wno-deprecated-pragma)
     endif()
 endif()
 
@@ -177,6 +175,8 @@ set(LLAMA_TOOLS_INSTALL OFF CACHE BOOL "" FORCE)
 set(LLAMA_CURL OFF CACHE BOOL "" FORCE)
 set(LLAMA_OPENSSL OFF CACHE BOOL "" FORCE)
 set(LLAMA_SUBPROCESS OFF CACHE BOOL "" FORCE)
+set(GGML_CCACHE OFF CACHE BOOL "" FORCE)
+set(LLAMA_ALL_WARNINGS OFF CACHE BOOL "" FORCE)
 
 FetchContent_Declare(
     llama_cpp
