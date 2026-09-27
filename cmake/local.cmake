@@ -547,6 +547,7 @@ function(ollama_add_llama_server_build name)
         ${_generator_args}
         -S ${CMAKE_SOURCE_DIR}/llama/server
         -B <BINARY_DIR>
+        -Wno-dev
         ${_cmake_args})
     if(ARG_PRESET)
         set(_configure_command ${CMAKE_COMMAND}
@@ -554,6 +555,7 @@ function(ollama_add_llama_server_build name)
             -S ${CMAKE_SOURCE_DIR}/llama/server
             --preset ${ARG_PRESET}
             -B <BINARY_DIR>
+            -Wno-dev
             ${_cmake_args})
     endif()
     ExternalProject_Add(ollama-llama-server-${name}
@@ -628,12 +630,14 @@ function(ollama_add_mlx_build name)
     set(_configure_command ${CMAKE_COMMAND}
         -S ${CMAKE_SOURCE_DIR}/cmake/mlx
         -B <BINARY_DIR>
+        -Wno-dev
         ${_cmake_args})
     if(ARG_PRESET)
         set(_configure_command ${CMAKE_COMMAND}
             -S ${CMAKE_SOURCE_DIR}/cmake/mlx
             --preset ${ARG_PRESET}
             -B <BINARY_DIR>
+            -Wno-dev
             ${_cmake_args})
     endif()
 
