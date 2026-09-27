@@ -32,10 +32,13 @@ ROCm auto-detected; GPU arch from `rocm_agent_enumerator`. Override with
 ## Install
 
 ```sh
-OLLAMA_BACKEND=rocm,mlx ./scripts/install.sh
+curl -fsSL https://raw.githubusercontent.com/maternion/ollama-rocm-mlx/main/scripts/install.sh | OLLAMA_BACKEND=rocm,mlx sh
 ```
 
-Installs to `/usr/local/{bin,lib/ollama}` with both backends.
+Installs to `/usr/local/{bin,lib/ollama}` with both backends. Run from a
+checkout to use the local `build/` payload; piped (as above) it clones
+`main` (plus the `mlx-rocm`/`mlx-c` siblings) and builds. Set
+`OLLAMA_PAYLOAD_URL=<tarball>` to install a prebuilt payload instead.
 
 ## Results
 

@@ -23,10 +23,19 @@ warning() { echo "${red}WARNING:${plain} $*"; }
 # When unset, the prebuilt release for the detected GPU is downloaded from
 # ollama.com (upstream behaviour).
 OLLAMA_BACKEND="${OLLAMA_BACKEND:-}"
-# Directory holding a locally built payload (build/lib/ollama). Defaults to
-# <repo>/build when this script is run from a checkout.
-SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-OLLAMA_PAYLOAD_DIR="${OLLAMA_PAYLOAD_DIR:-$(dirname "$SCRIPT_DIR")/build}"
+# Directory holding a locally built payload (<dir>/lib/ollama + <dir>/ollama).
+# Auto-detected when run from a checkout; otherwise the payload is downloaded
+# from OLLAMA_PAYLOAD_URL (a GitHub release by default).
+SCRIPT_DIR=""
+case "$0" in
+    */*) SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" 2>/dev/null && pwd) ;;
+esac
+if [ -z "${OLLAMA_PAYLOAD_DIR:-}" ] && [ -n "$SCRIPT_DIR" ] \
+        && [ -d "$(dirname "$SCRIPT_DIR")/build/lib/ollama" ]; then
+    OLLAMA_PAYLOAD_DIR="$(dirname "$SCRIPT_DIR")/build"
+fi
+OLLAMA_PAYLOAD_DIR="${OLLAMA_PAYLOAD_DIR:-}"
+OLLAMA_PAYLOAD_URL="${OLLAMA_PAYLOAD_URL:-}"
 
 TEMP_DIR=$(mktemp -d)
 cleanup() { rm -rf $TEMP_DIR; }
@@ -185,7 +194,67 @@ $SUDO install -o0 -g0 -m755 -d "$OLLAMA_INSTALL_DIR/lib/ollama"
 # Local payload install: when OLLAMA_BACKEND names one or more locally built
 # backends, install the binary plus the staged payload instead of downloading
 # release artifacts. This is the ROCm/MLX developer path.
+#
+# Payload resolution order:
+#   1. OLLAMA_PAYLOAD_DIR (explicit path to a dir holding ollama + lib/ollama)
+#   2. a checkout next to this script (repo/scripts/install.sh -> repo/build)
+#   3. downloaded from OLLAMA_PAYLOAD_URL, or built from the GitHub source tree
+#      at tree/main (curl -fsSL ... | sh path)
+fetch_payload() {
+    # Branch (or tag/sha) and repo of this fork; override for testing.
+    OLLAMA_SOURCE_REPO="${OLLAMA_SOURCE_REPO:-github.com/maternion/ollama-rocm-mlx}"
+    OLLAMA_SOURCE_REF="${OLLAMA_SOURCE_REF:-main}"
+    OLLAMA_SOURCE_DIR="$TEMP_DIR/ollama-rocm-mlx"
+
+    if [ -n "$OLLAMA_PAYLOAD_URL" ]; then
+        status "Downloading payload from $OLLAMA_PAYLOAD_URL"
+        mkdir -p "$TEMP_DIR/payload"
+        curl --fail --show-error --location --progress-bar \
+            "$OLLAMA_PAYLOAD_URL" -o "$TEMP_DIR/payload.tar"
+        case "$OLLAMA_PAYLOAD_URL" in
+            *.tar.zst) zstd -d < "$TEMP_DIR/payload.tar" | $SUDO tar -xf - -C "$TEMP_DIR/payload" ;;
+            *.tgz|*.tar.gz) $SUDO tar -xzf "$TEMP_DIR/payload.tar" -C "$TEMP_DIR/payload" ;;
+            *) error "Unsupported payload archive: $OLLAMA_PAYLOAD_URL" ;;
+        esac
+        OLLAMA_PAYLOAD_DIR="$TEMP_DIR/payload"
+        return 0
+    fi
+
+    _need=$(require git curl tar)
+    if [ -n "$_need" ]; then
+        error "Building from source needs:$_need"
+    fi
+    status "Cloning $OLLAMA_SOURCE_REPO ($OLLAMA_SOURCE_REF) to build the payload..."
+    git clone --depth 1 --branch "$OLLAMA_SOURCE_REF" \
+        "https://${OLLAMA_SOURCE_REPO}.git" "$OLLAMA_SOURCE_DIR" || \
+        error "Could not clone https://${OLLAMA_SOURCE_REPO}.git"
+
+    OLLAMA_PAYLOAD_DIR="$OLLAMA_SOURCE_DIR/build"
+    # The MLX backend builds against sibling checkouts; clone them too.
+    OLLAMA_MLX_REPO="${OLLAMA_MLX_REPO:-github.com/maternion/mlx}"
+    OLLAMA_MLX_REF="${OLLAMA_MLX_REF:-rocm-current}"
+    OLLAMA_MLXC_REPO="${OLLAMA_MLXC_REPO:-github.com/ml-explore/mlx-c}"
+    OLLAMA_MLXC_REF="${OLLAMA_MLXC_REF:-main}"
+    _parent=$(dirname "$OLLAMA_SOURCE_DIR")
+    [ -d "$_parent/mlx-rocm" ] || \
+        git clone --depth 1 --branch "$OLLAMA_MLX_REF" \
+            "https://${OLLAMA_MLX_REPO}.git" "$_parent/mlx-rocm" || \
+        error "Could not clone https://${OLLAMA_MLX_REPO}.git"
+    [ -d "$_parent/mlx-c" ] || \
+        git clone --depth 1 --branch "$OLLAMA_MLXC_REF" \
+            "https://${OLLAMA_MLXC_REPO}.git" "$_parent/mlx-c" || \
+        error "Could not clone https://${OLLAMA_MLXC_REPO}.git"
+
+    status "Building (compiles both ROCm and MLX engines; 20-40 min)..."
+    _jobs=$(nproc 2>/dev/null || getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)
+    ( cd "$OLLAMA_SOURCE_DIR" && cmake -B build . && cmake --build build --parallel "$_jobs" ) \
+        || error "Build failed; see output above"
+}
+
 install_local_payload() {
+    if [ -z "$OLLAMA_PAYLOAD_DIR" ] || [ ! -d "$OLLAMA_PAYLOAD_DIR/lib/ollama" ]; then
+        fetch_payload
+    fi
     PAYLOAD_LIB="$OLLAMA_PAYLOAD_DIR/lib/ollama"
     GO_BIN="$OLLAMA_PAYLOAD_DIR/../ollama"
     if [ ! -x "$GO_BIN" ]; then
