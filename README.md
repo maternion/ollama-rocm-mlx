@@ -32,7 +32,7 @@ ROCm auto-detected; GPU arch from `rocm_agent_enumerator`. Override with
 ## Install
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/maternion/ollama-rocm-mlx/main/scripts/install.sh | OLLAMA_BACKEND=rocm,mlx sh
+curl -fsSL https://github.com/maternion/ollama-rocm-mlx/raw/main/scripts/install.sh | OLLAMA_BACKEND=rocm,mlx sh
 ```
 
 Installs to `/usr/local/{bin,lib/ollama}` with both backends. Run from a
