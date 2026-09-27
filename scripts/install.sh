@@ -220,9 +220,29 @@ fetch_payload() {
         return 0
     fi
 
+    # Binary-first: try the matching prebuilt release asset before building.
+    OLLAMA_RELEASE_REPO="${OLLAMA_RELEASE_REPO:-${OLLAMA_SOURCE_REPO}}"
+    OLLAMA_RELEASE_TAG="${OLLAMA_RELEASE_TAG:-latest}"
+    _asset="ollama-rocm-mlx-linux-${ARCH}.tar.zst"
+    _rel_url="https://${OLLAMA_RELEASE_REPO}/releases/download/${OLLAMA_RELEASE_TAG}/${_asset}"
+    if curl --fail --silent --head --location "$_rel_url" >/dev/null 2>&1; then
+        status "Downloading prebuilt payload from ${OLLAMA_RELEASE_TAG}..."
+        mkdir -p "$TEMP_DIR/payload"
+        if available zstd && \
+           curl --fail --show-error --location --progress-bar "$_rel_url" -o "$TEMP_DIR/payload.tar" && \
+           zstd -d < "$TEMP_DIR/payload.tar" | $SUDO tar -xf - -C "$TEMP_DIR/payload"; then
+            OLLAMA_PAYLOAD_DIR="$TEMP_DIR/payload"
+            return 0
+        fi
+        status "Prebuilt download failed; falling back to source build."
+    fi
+
     _need=$(require git curl tar)
     if [ -n "$_need" ]; then
         error "Building from source needs:$_need"
+    fi
+    if [ "${OLLAMA_BUILD_FROM_SOURCE:-0}" != "1" ] && [ "${OLLAMA_ALLOW_SOURCE:-1}" != "1" ]; then
+        error "No prebuilt payload found for ${OLLAMA_RELEASE_TAG}. Re-run with OLLAMA_ALLOW_SOURCE=1 to build from source (~30 min)."
     fi
     status "Cloning $OLLAMA_SOURCE_REPO ($OLLAMA_SOURCE_REF) to build the payload..."
     git clone --depth 1 --branch "$OLLAMA_SOURCE_REF" \
