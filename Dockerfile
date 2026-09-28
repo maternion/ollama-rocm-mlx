@@ -23,8 +23,12 @@ ENV PATH=/opt/rh/gcc-toolset-13/root/usr/bin:$PATH
 # Separate ROCm 10 base for the MLX ROCm backend (gfx1200/gfx950 WMMA + fp8
 # need the 10.x toolchain). The GGUF llama.cpp runner stays on ROCm 7.2.1
 # above (rocm_v7_2) for parity with ollama's upstream release.
-FROM --platform=linux/amd64 rocm/dev-almalinux-8:${ROCM10VERSION}-complete AS base-amd64-rocm10
-RUN dnf install -y yum-utils ccache gcc-toolset-13-gcc gcc-toolset-13-gcc-c++ gcc-toolset-13-binutils git
+# ROCm 10 is only published on the ubuntu-24.04 base (not almalinux-8), and
+# uses the -full suffix (10.0.0-full), not -complete.
+FROM --platform=linux/amd64 rocm/dev-ubuntu-24.04:${ROCM10VERSION}.0-full AS base-amd64-rocm10
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential ccache git ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
 ENV PATH=/opt/rh/gcc-toolset-13/root/usr/bin:$PATH
 
 FROM --platform=linux/arm64 almalinux:8 AS base-arm64
@@ -160,7 +164,7 @@ FROM rocm-10-deps AS mlx-rocm-v10
 ARG OLLAMA_MLX_REPO=maternion/mlx
 ARG OLLAMA_MLX_BRANCH=rocm-current
 ARG OLLAMA_MLX_BUILD_JOBS=
-ENV CC=clang CXX=clang++ CXXFLAGS=--gcc-toolchain=/opt/rh/gcc-toolset-13/root/usr
+ENV CC=clang CXX=clang++
 WORKDIR /go/src/github.com/ollama/ollama
 # Clone the MLX fork into the image so the source-override path is used
 # (avoids ExternalProject fetching ml-explore/mlx at the pinned tag, which
