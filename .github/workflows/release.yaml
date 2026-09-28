@@ -4,6 +4,14 @@ on:
   push:
     tags:
       - 'v*'
+  workflow_dispatch:
+    # Manual trigger: build + publish release assets on demand without a tag.
+    # Inputs are optional; unset inputs behave the same as a tag push.
+    inputs:
+      version:
+        description: 'Release version (e.g. 0.0.1). If unset, uses the git ref name.'
+        required: false
+        type: string
 
 env:
   CGO_CFLAGS: '-O3'
@@ -22,8 +30,13 @@ jobs:
       - name: Set environment
         id: goflags
         run: |
-          echo GOFLAGS="'-ldflags=-w -s \"-X=github.com/ollama/ollama/version.Version=${GITHUB_REF_NAME#v}\" \"-X=github.com/ollama/ollama/server.mode=release\"'" | tee -a $GITHUB_OUTPUT
-          echo VERSION="${GITHUB_REF_NAME#v}" | tee -a $GITHUB_OUTPUT
+          if [ -n "${{ inputs.version }}" ]; then
+            REF="${{ inputs.version }}"
+          else
+            REF="${GITHUB_REF_NAME#v}"
+          fi
+          echo GOFLAGS="'-ldflags=-w -s \"-X=github.com/ollama/ollama/version.Version=${REF}\" \"-X=github.com/ollama/ollama/server.mode=release\"'" | tee -a $GITHUB_OUTPUT
+          echo VERSION="${REF}" | tee -a $GITHUB_OUTPUT
           echo vendorsha=$(cat LLAMA_CPP_VERSION)-$(cat MLX_VERSION)-$(cat MLX_C_VERSION) | tee -a $GITHUB_OUTPUT
 
   darwin-build:
@@ -492,6 +505,8 @@ jobs:
           - arch: amd64
             target: llama-server-rocm_v7_2
           - arch: amd64
+            target: mlx-rocm-v10
+          - arch: amd64
             target: llama-server-vulkan
           - arch: arm64
             target: llama-server-cpu
@@ -503,7 +518,7 @@ jobs:
             target: jetpack-5
           - arch: arm64
             target: jetpack-6
-    runs-on: ${{ matrix.arch == 'arm64' && 'linux-arm64' || 'linux' }}
+    runs-on: ${{ matrix.arch == 'arm64' && format('{0}-{1}', matrix.os, matrix.arch) || 'ubuntu-latest-large' }}
     environment: release
     needs: setup-environment
     env:
@@ -515,7 +530,7 @@ jobs:
         with:
           username: ${{ vars.DOCKER_USER }}
           password: ${{ secrets.DOCKER_ACCESS_TOKEN }}
-      - if: matrix.target == 'mlx'
+      - if: matrix.target == 'mlx' || matrix.target == 'mlx-rocm-v10'
         name: Increase Linux swap to 200 GB
         shell: bash
         run: |
@@ -554,6 +569,31 @@ jobs:
             type=registry,ref=ollama/release:cache-${{ matrix.arch }}-${{ matrix.target }}
             type=registry,ref=${{ vars.DOCKER_REPO }}:latest
           cache-to: type=registry,ref=ollama/release:cache-${{ matrix.arch }}-${{ matrix.target }},mode=max
+
+  # Build the combined ollama-rocm-mlx-linux-amd64.tar.zst release asset.
+  # Runs only on tag pushes (v*) or manual workflow_dispatch — the workflow's
+  # top-level `on:` trigger gates this. Produces one artifact: the Go binary
+  # + the ROCm 7.2 GGUF runner (rocm_v7_2) + the ROCm 10 MLX runner
+  # (mlx_rocm_v10) for all supported AMD GPUs. Heavy Docker stages are
+  # cache-hit from linux-depends; this just assembles + tars.
+  rocm-mlx-release:
+    needs: [setup-environment, linux-depends]
+    runs-on: ubuntu-latest-large
+    environment: release
+    env:
+      GOFLAGS: ${{ needs.setup-environment.outputs.GOFLAGS }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Build combined asset
+        run: ./scripts/build_rocm_mlx.sh
+        env:
+          OLLAMA_VERSION: ${{ needs.setup-environment.outputs.VERSION }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ollama-rocm-mlx-linux-amd64
+          path: dist/ollama-rocm-mlx-linux-amd64.tar.zst
+          if-no-files-found: error
 
   # Build each Docker variant (OS, arch, and flavor) separately. Using QEMU is unreliable and slower.
   # Heavy stages were pre-built by linux-depends; this job is cache-hit-only for those layers
@@ -748,7 +788,7 @@ jobs:
   release:
     runs-on: ubuntu-latest
     environment: release
-    needs: [darwin-build, windows-app, docker-build-push]
+    needs: [darwin-build, windows-app, docker-build-push, rocm-mlx-release]
     concurrency:
       group: release-publish
       queue: max
@@ -762,6 +802,11 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           pattern: bundles-*
+          path: dist
+          merge-multiple: true
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: ollama-rocm-mlx-linux-amd64
           path: dist
           merge-multiple: true
       - name: Log dist contents

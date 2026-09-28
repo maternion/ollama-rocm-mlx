@@ -3,6 +3,7 @@
 ARG FLAVOR=${TARGETARCH}
 
 ARG ROCMVERSION=7.2.1
+ARG ROCM10VERSION=10.0
 ARG JETPACK5VERSION=r35.4.1
 ARG JETPACK6VERSION=r36.4.0
 ARG CMAKEVERSION=3.31.2
@@ -17,6 +18,13 @@ FROM scratch AS local-mlx-c
 FROM --platform=linux/amd64 rocm/dev-almalinux-8:${ROCMVERSION}-complete AS base-amd64
 RUN dnf install -y yum-utils ccache gcc-toolset-13-gcc gcc-toolset-13-gcc-c++ gcc-toolset-13-binutils \
     && yum-config-manager --add-repo https://developer.download.nvidia.com/compute/cuda/repos/rhel8/x86_64/cuda-rhel8.repo
+ENV PATH=/opt/rh/gcc-toolset-13/root/usr/bin:$PATH
+
+# Separate ROCm 10 base for the MLX ROCm backend (gfx1200/gfx950 WMMA + fp8
+# need the 10.x toolchain). The GGUF llama.cpp runner stays on ROCm 7.2.1
+# above (rocm_v7_2) for parity with ollama's upstream release.
+FROM --platform=linux/amd64 rocm/dev-almalinux-8:${ROCM10VERSION}-complete AS base-amd64-rocm10
+RUN dnf install -y yum-utils ccache gcc-toolset-13-gcc gcc-toolset-13-gcc-c++ gcc-toolset-13-binutils git
 ENV PATH=/opt/rh/gcc-toolset-13/root/usr/bin:$PATH
 
 FROM --platform=linux/arm64 almalinux:8 AS base-arm64
@@ -140,6 +148,41 @@ RUN rm -f dist/lib/ollama/rocm_v7_2/rocblas/library/*gfx90[06]*
 
 FROM scratch AS publish-llama-server-rocm_v7_2
 COPY --from=llama-server-rocm_v7_2 dist/lib/ollama /lib/ollama/
+
+# MLX ROCm backend (gfx9/10/11/12, fat binary; runtime dispatch like ollama's
+# libggml-hip.so). Built against ROCm 10 for gfx1200/gfx950 WMMA + fp8 paths.
+# The MLX fork (maternion/mlx rocm-current) carries the ROCm backend patches;
+# MLX_VERSION pins the commit.
+FROM base-amd64-rocm10 AS rocm-10-deps
+ENV PATH=/opt/rocm/llvm/bin:/opt/rocm/hcc/bin:/opt/rocm/hip/bin:/opt/rocm/bin:$PATH
+
+FROM rocm-10-deps AS mlx-rocm-v10
+ARG OLLAMA_MLX_REPO=maternion/mlx
+ARG OLLAMA_MLX_BRANCH=rocm-current
+ARG OLLAMA_MLX_BUILD_JOBS=
+ENV CC=clang CXX=clang++ CXXFLAGS=--gcc-toolchain=/opt/rh/gcc-toolset-13/root/usr
+WORKDIR /go/src/github.com/ollama/ollama
+# Clone the MLX fork into the image so the source-override path is used
+# (avoids ExternalProject fetching ml-explore/mlx at the pinned tag, which
+# does not carry the ROCm backend).
+RUN git clone --depth 1 --branch ${OLLAMA_MLX_BRANCH} \
+        https://github.com/${OLLAMA_MLX_REPO}.git /opt/mlx-rocm
+ENV OLLAMA_MLX_SOURCE=/opt/mlx-rocm
+COPY CMakeLists.txt CMakePresets.json .
+COPY cmake cmake
+COPY mlx mlx
+COPY mlxrunner/xgrammar/native mlxrunner/xgrammar/native
+COPY go.mod go.sum .
+COPY MLX_VERSION MLX_C_VERSION .
+RUN curl -fsSL https://golang.org/dl/go$(awk '/^go/ { print $2 }' go.mod).linux-$(case $(uname -m) in x86_64) echo amd64 ;; aarch64) echo arm64 ;; esac).tar.gz | tar xz -C /usr/local
+ENV PATH=/usr/local/go/bin:$PATH
+RUN go mod download
+RUN --mount=type=cache,target=/root/.ccache \
+    cmake -S . -B build/mlx_rocm_v10 -DOLLAMA_MLX_BACKENDS=rocm_v10 -DOLLAMA_PAYLOAD_INSTALL_PREFIX=/go/src/github.com/ollama/ollama/dist \
+        && cmake --build build/mlx_rocm_v10 --target ollama-mlx-rocm_v10 -- -l $(nproc) ${OLLAMA_MLX_BUILD_JOBS:+-j ${OLLAMA_MLX_BUILD_JOBS}}
+
+FROM scratch AS publish-mlx-rocm-v10
+COPY --from=mlx-rocm-v10 /go/src/github.com/ollama/ollama/dist/lib/ollama /lib/ollama/
 
 FROM vulkan-deps AS llama-server-vulkan
 COPY LLAMA_CPP_VERSION .
@@ -281,6 +324,7 @@ COPY --from=llama-server-cuda_v12 dist/lib/ollama /lib/ollama/
 COPY --from=llama-server-cuda_v13 dist/lib/ollama /lib/ollama/
 COPY --from=llama-server-vulkan   dist/lib/ollama /lib/ollama/
 COPY --from=mlx     /go/src/github.com/ollama/ollama/dist/lib/ollama /lib/ollama/
+COPY --from=mlx-rocm-v10 /go/src/github.com/ollama/ollama/dist/lib/ollama /lib/ollama/
 
 FROM --platform=linux/arm64 scratch AS arm64
 COPY --from=llama-server-cpu dist/lib/ollama /lib/ollama/
@@ -292,10 +336,20 @@ COPY --from=jetpack-6 dist/lib/ollama/ /lib/ollama/
 FROM scratch AS rocm
 COPY --from=llama-server-cpu  dist/lib/ollama /lib/ollama
 COPY --from=llama-server-rocm_v7_2 dist/lib/ollama /lib/ollama
+COPY --from=mlx-rocm-v10 /go/src/github.com/ollama/ollama/dist/lib/ollama /lib/ollama
 
 FROM --platform=linux/amd64 scratch AS amd64-archive
 COPY --from=amd64 /lib/ollama /lib/ollama/
 COPY --from=llama-server-rocm_v7_2 dist/lib/ollama /lib/ollama/
+COPY --from=mlx-rocm-v10 /go/src/github.com/ollama/ollama/dist/lib/ollama /lib/ollama/
+
+# Combined ROCm + MLX release archive. This is what scripts/build_rocm_mlx.sh
+# targets and what scripts/install.sh fetches as
+# ollama-rocm-mlx-linux-amd64.tar.zst (Go binary + rocm_v7_2 + mlx_rocm_v10).
+FROM --platform=linux/amd64 scratch AS rocm-mlx-archive
+COPY --from=build /bin/ollama /bin/ollama
+COPY --from=llama-server-rocm_v7_2 dist/lib/ollama /lib/ollama/
+COPY --from=mlx-rocm-v10 /go/src/github.com/ollama/ollama/dist/lib/ollama /lib/ollama/
 
 FROM --platform=linux/arm64 scratch AS arm64-archive
 COPY --from=arm64 /lib/ollama /lib/ollama/

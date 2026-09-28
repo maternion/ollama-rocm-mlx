@@ -59,7 +59,7 @@
       "inherits": [ "mlx_rocm_v10_base" ],
       "binaryDir": "${sourceDir}/../../build/mlx_rocm_v10",
       "cacheVariables": {
-        "MLX_ROCM_ARCHITECTURES": "gfx1200"
+        "MLX_ROCM_ARCHITECTURES": "gfx908;gfx90a;gfx942;gfx950;gfx1010;gfx1011;gfx1012;gfx1030;gfx1031;gfx1032;gfx1100;gfx1101;gfx1102;gfx1150;gfx1151;gfx1152;gfx1200;gfx1201"
       }
     },
     {
