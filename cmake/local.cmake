@@ -40,7 +40,9 @@ if(_ollama_rocm_host AND EXISTS "${CMAKE_SOURCE_DIR}/../mlx-c/mlx/c/mlx.h")
     endif()
 endif()
 
-if(_ollama_rocm_host AND NOT OLLAMA_LLAMA_BACKENDS)
+if(_ollama_rocm_host
+    AND NOT OLLAMA_LLAMA_BACKENDS
+    AND EXISTS "${CMAKE_SOURCE_DIR}/llama/server/CMakeLists.txt")
     set(OLLAMA_LLAMA_BACKENDS "rocm_v7_2" CACHE STRING
         "Semicolon-separated llama-server GPU backends to build" FORCE)
     message(STATUS "Defaulting OLLAMA_LLAMA_BACKENDS=rocm_v7_2 (ROCm toolchain detected)")
