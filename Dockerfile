@@ -191,7 +191,7 @@ RUN curl -fsSL https://golang.org/dl/go$(awk '/^go/ { print $2 }' go.mod).linux-
 ENV PATH=/usr/local/go/bin:$PATH
 RUN go mod download
 RUN --mount=type=cache,target=/root/.ccache \
-    cmake -S . -B build/mlx_rocm_v10 -DOLLAMA_MLX_BACKENDS=rocm_v10 -DOLLAMA_PAYLOAD_INSTALL_PREFIX=/go/src/github.com/ollama/ollama/dist \
+    cmake -S . -B build/mlx_rocm_v10 -DOLLAMA_MLX_BACKENDS=rocm_v10 -DOLLAMA_LLAMA_BACKENDS= -DOLLAMA_PAYLOAD_INSTALL_PREFIX=/go/src/github.com/ollama/ollama/dist \
         && cmake --build build/mlx_rocm_v10 --target ollama-mlx-rocm_v10 -- -l $(nproc) ${OLLAMA_MLX_BUILD_JOBS:+-j ${OLLAMA_MLX_BUILD_JOBS}}
 
 FROM scratch AS publish-mlx-rocm-v10
