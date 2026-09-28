@@ -30,6 +30,7 @@ ARG CMAKEVERSION
 ARG NINJAVERSION
 RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential ccache git ca-certificates unzip wget xz-utils \
+        libopenblas-dev liblapack-dev liblapacke-dev \
     && rm -rf /var/lib/apt/lists/* \
     && curl -fsSL https://github.com/Kitware/CMake/releases/download/v${CMAKEVERSION}/cmake-${CMAKEVERSION}-linux-x86_64.tar.gz \
         | tar xz -C /usr/local --strip-components 1 \
