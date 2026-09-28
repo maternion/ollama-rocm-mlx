@@ -26,10 +26,19 @@ ENV PATH=/opt/rh/gcc-toolset-13/root/usr/bin:$PATH
 # ROCm 10 is only published on the ubuntu-24.04 base (not almalinux-8), and
 # uses the -full suffix (10.0.0-full), not -complete.
 FROM --platform=linux/amd64 rocm/dev-ubuntu-24.04:${ROCM10VERSION}.0-full AS base-amd64-rocm10
+ARG CMAKEVERSION
+ARG NINJAVERSION
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        build-essential ccache git ca-certificates \
-    && rm -rf /var/lib/apt/lists/*
-ENV PATH=/opt/rh/gcc-toolset-13/root/usr/bin:$PATH
+        build-essential ccache git ca-certificates unzip wget xz-utils \
+    && rm -rf /var/lib/apt/lists/* \
+    && curl -fsSL https://github.com/Kitware/CMake/releases/download/v${CMAKEVERSION}/cmake-${CMAKEVERSION}-linux-x86_64.tar.gz \
+        | tar xz -C /usr/local --strip-components 1 \
+    && wget -q -O /tmp/ninja.zip \
+        https://github.com/ninja-build/ninja/releases/download/v${NINJAVERSION}/ninja-linux.zip \
+    && unzip /tmp/ninja.zip -d /usr/local/bin \
+    && rm /tmp/ninja.zip
+ENV CMAKE_GENERATOR=Ninja
+ENV PATH=/usr/local/bin:$PATH
 
 FROM --platform=linux/arm64 almalinux:8 AS base-arm64
 # install epel-release for ccache
