@@ -518,7 +518,7 @@ jobs:
             target: jetpack-5
           - arch: arm64
             target: jetpack-6
-    runs-on: ${{ matrix.arch == 'arm64' && format('{0}-{1}', matrix.os, matrix.arch) || 'ubuntu-latest-large' }}
+    runs-on: ${{ matrix.arch == 'arm64' && format('{0}-{1}', matrix.os, matrix.arch) || 'ubuntu-latest' }}
     environment: release
     needs: setup-environment
     env:
@@ -578,7 +578,7 @@ jobs:
   # cache-hit from linux-depends; this just assembles + tars.
   rocm-mlx-release:
     needs: [setup-environment, linux-depends]
-    runs-on: ubuntu-latest-large
+    runs-on: ubuntu-latest
     environment: release
     env:
       GOFLAGS: ${{ needs.setup-environment.outputs.GOFLAGS }}
