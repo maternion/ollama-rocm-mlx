@@ -576,7 +576,12 @@ jobs:
   # (mlx_rocm_v10) for all supported AMD GPUs. Heavy Docker stages are
   # cache-hit from linux-depends; this just assembles + tars.
   rocm-mlx-release:
-    needs: [setup-environment, linux-depends]
+    # Builds the combined rocm-mlx archive end-to-end itself (Go binary +
+    # rocm_v7_2 + mlx_rocm_v10 via the rocm-mlx-archive Docker target), so it
+    # only needs the version from setup-environment. Do NOT gate it on
+    # linux-depends: the fork lacks the self-hosted arm64 runners and the
+    # large-runner billing the full upstream matrix assumes.
+    needs: [setup-environment]
     runs-on: ubuntu-latest
     environment: release
     env:
