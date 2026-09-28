@@ -531,7 +531,7 @@ jobs:
         with:
           username: ${{ vars.DOCKER_USER }}
           password: ${{ secrets.DOCKER_ACCESS_TOKEN }}
-      - if: matrix.target == 'mlx' || matrix.target == 'mlx-rocm-v10'
+      - if: matrix.target == 'mlx'
         name: Increase Linux swap to 200 GB
         shell: bash
         run: |
